@@ -24,6 +24,8 @@ var (
 	// Make sure that your group is surrounded in boundary characters such as below to reduce false positives.
 	idPat  = regexp.MustCompile(`\b(oauth\-[a-z0-9]{8,}\-[a-z0-9]{5})\b`)
 	keyPat = regexp.MustCompile(detectors.PrefixRegex([]string{"saucelabs"}) + `\b([a-z0-9]{8}\-[a-z0-9]{4}\-[a-z0-9]{4}\-[a-z0-9]{4}\-[a-z0-9]{12})\b`)
+
+	regions = []string{"us-east-1", "us-west-4", "eu-central-1"}
 )
 
 // Keywords are used for efficiently pre-filtering chunks.
@@ -61,19 +63,23 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			if verify {
 				data := fmt.Sprintf("%s:%s", idMatch, keyMatch)
 				encoded := b64.StdEncoding.EncodeToString([]byte(data))
-				req, err := http.NewRequestWithContext(ctx, "GET", "https://api.eu-central-1.saucelabs.com/team-management/v1/teams", nil)
-				if err != nil {
-					continue
-				}
-				req.Header.Add("Authorization", fmt.Sprintf("Basic %s", encoded))
-				// req.SetBasicAuth(idMatch, keyMatch)
-				res, err := client.Do(req)
-				if err == nil {
-					defer res.Body.Close()
-					if res.StatusCode >= 200 && res.StatusCode < 300 {
-						s1.Verified = true
+				for _, region := range regions {
+					req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://api.%s.saucelabs.com/team-management/v1/teams", region), nil)
+					if err != nil {
+						continue
 					}
-				}
+					req.Header.Add("Authorization", fmt.Sprintf("Basic %s", encoded))
+					// req.SetBasicAuth(idMatch, keyMatch)
+					res, err := client.Do(req)
+					if err == nil {
+						defer res.Body.Close()
+						if res.StatusCode >= 200 && res.StatusCode < 300 || res.StatusCode == 403 {
+							s1.Verified = true
+						} else {
+							// This function will check false positives for common test words, but also it will make sure the key appears 'random' enough to be a real key.
+							if detectors.IsKnownFalsePositive(keyMatch, detectors.DefaultFalsePositives, true) {
+								continue
+							}
 			}
 
 			results = append(results, s1)
